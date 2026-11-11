@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Event Loop Gym</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  /* layout: top bar with tabs, then puzzle list sidebar + workbench (code, prediction, results) */
+  --bg:#f3f5f8; --panel:#ffffff; --ink:#18202f; --muted:#596277; --line:#dce1e9; --accent:#2c50d4; --accent-soft:#e6ebfc;
+  --sync:#955400; --sync-bg:#fcefd9; --micro:#13704a; --micro-bg:#e0f3e9; --macro:#ad3418; --macro-bg:#fbe5de; --web:#663bb0; --web-bg:#eee7fa;
+  --ok:#13704a; --ok-bg:#e0f3e9; --bad:#b9261a; --bad-bg:#fbe4e1;
+  --font-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif; --font-mono:"JetBrains Mono",ui-monospace,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#10131a; --panel:#171b24; --ink:#e6e9f0; --muted:#9aa3b6; --line:#2a3141; --accent:#86a0ff; --accent-soft:#1e294c;
+  --sync:#f0b35e; --sync-bg:#382811; --micro:#62d39d; --micro-bg:#11301f; --macro:#ff8f73; --macro-bg:#3b1b13; --web:#bda2ff; --web-bg:#291e44;
+  --ok:#62d39d; --ok-bg:#11301f; --bad:#ff8173; --bad-bg:#3d1714; color-scheme:dark;}}
+:root[data-theme="dark"]{
+  --bg:#10131a; --panel:#171b24; --ink:#e6e9f0; --muted:#9aa3b6; --line:#2a3141; --accent:#86a0ff; --accent-soft:#1e294c;
+  --sync:#f0b35e; --sync-bg:#382811; --micro:#62d39d; --micro-bg:#11301f; --macro:#ff8f73; --macro-bg:#3b1b13; --web:#bda2ff; --web-bg:#291e44;
+  --ok:#62d39d; --ok-bg:#11301f; --bad:#ff8173; --bad-bg:#3d1714; color-scheme:dark;}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font-body);font-size:15px;line-height:1.55}
+button{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:7px 14px;cursor:pointer}
+button:hover{border-color:var(--muted)}
+button:focus-visible,textarea:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--panel);font-weight:500}
+button.ghost{border-color:transparent;background:transparent;color:var(--muted)}
+h1,h2,h3{text-wrap:balance;margin:0;font-weight:600}
+code,pre,.mono{font-family:var(--font-mono)}
+.top{display:flex;align-items:center;gap:20px;flex-wrap:wrap;padding:14px 24px;border-bottom:1px solid var(--line);background:var(--panel)}
+.brand{font-size:18px}.brand span{color:var(--muted);font-weight:400;font-size:14px;margin-left:8px}
+.tabs{display:flex;gap:4px;margin-left:auto}
+.tabs a{color:var(--muted);text-decoration:none;padding:6px 12px;border-radius:8px;font-weight:500}
+.tabs a.on{background:var(--accent-soft);color:var(--accent)}
+.wrap{max-width:1180px;margin:0 auto;padding:20px 24px 48px}
+.practice{display:grid;grid-template-columns:250px minmax(0,1fr);gap:20px;align-items:start}
+.side{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;position:sticky;top:12px}
+.side h3{font-size:12px;color:var(--muted);font-weight:500;margin:14px 0 4px;text-transform:none}
+.side h3:first-of-type{margin-top:8px}
+.side button{display:flex;width:100%;text-align:left;border:none;background:transparent;padding:5px 8px;gap:8px;align-items:center;font-size:14px;border-radius:6px}
+.side button.on{background:var(--accent-soft);color:var(--accent)}
+.dot{width:8px;height:8px;border-radius:50%;border:1.5px solid var(--line);flex:none}
+.dot.done{background:var(--ok);border-color:var(--ok)}
+.progress{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin-top:6px}
+.progress div{height:100%;background:var(--ok)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+.stack{display:flex;flex-direction:column;gap:16px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.label{font-size:12px;color:var(--muted);font-weight:500;margin:0 0 8px}
+.code{margin:0;font-size:13px;line-height:1.7;overflow-x:auto;counter-reset:ln}
+.code span{display:block;white-space:pre}
+.code span::before{counter-increment:ln;content:counter(ln);display:inline-block;width:2.2em;color:var(--muted);opacity:.6;text-align:right;margin-right:14px}
+.chip{font-family:var(--font-mono);font-size:13px;padding:6px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg)}
+.chip:disabled{opacity:.3;cursor:default}
+.slot{font-family:var(--font-mono);font-size:13px;padding:6px 10px;border-radius:8px;border:1px solid var(--accent);background:var(--accent-soft);color:var(--accent);display:inline-flex;gap:6px;align-items:center}
+.slot small{opacity:.7;font-family:var(--font-body)}
+.slot.ok{border-color:var(--ok);background:var(--ok-bg);color:var(--ok)}
+.slot.bad{border-color:var(--bad);background:var(--bad-bg);color:var(--bad)}
+.empty{color:var(--muted);font-size:14px;font-style:italic}
+.err{color:var(--bad);font-size:13px;margin:6px 0 0}
+.verdict{font-weight:600;font-size:16px}
+.verdict.ok{color:var(--ok)}.verdict.bad{color:var(--bad)}
+.pill{font-size:11.5px;font-weight:500;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.p-sync{background:var(--sync-bg);color:var(--sync)}.p-micro{background:var(--micro-bg);color:var(--micro)}
+.p-macro{background:var(--macro-bg);color:var(--macro)}.p-web{background:var(--web-bg);color:var(--web)}.p-loop{background:var(--accent-soft);color:var(--accent)}
+.tl{display:flex;flex-direction:column;gap:2px;margin:0;padding:0;list-style:none}
+.tl li{display:grid;grid-template-columns:118px minmax(0,1fr);gap:10px;align-items:center;padding:5px 0;border-bottom:1px dashed var(--line);font-size:13.5px}
+.tl li:last-child{border-bottom:none}
+.tl .out{font-family:var(--font-mono)}
+.tl .sys{color:var(--muted)}
+.explain{border-left:3px solid var(--accent);padding:2px 0 2px 14px;margin:0;max-width:68ch}
+.legend{display:flex;gap:8px;flex-wrap:wrap}
+textarea{width:100%;min-height:300px;font-family:var(--font-mono);font-size:13px;line-height:1.65;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);resize:vertical;tab-size:2}
+.sheet{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}
+.sheet h2{font-size:16px;margin-bottom:10px}
+.sheet p,.sheet li{max-width:68ch}
+.sheet ul,.sheet ol{margin:0;padding-left:20px}
+.sheet li{margin:4px 0}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+td,th{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-weight:500;font-size:12px}
+.loopbox{font-family:var(--font-mono);font-size:13px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px;white-space:pre;overflow-x:auto;margin:0}
+.muted{color:var(--muted)}
+.stepper{outline:none}
+.stepper:focus-visible{outline:2px solid var(--accent);outline-offset:4px;border-radius:12px}
+.sgrid{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:12px}
+.sgrid .codebox{grid-row:span 2}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 12px;min-height:84px}
+.box.changed{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.box h4{margin:0 0 8px;font-size:12px;font-weight:500;color:var(--muted);display:flex;justify-content:space-between;gap:8px}
+.item{font-family:var(--font-mono);font-size:12.5px;padding:5px 9px;border-radius:7px;margin:4px 0}
+.i-sync{background:var(--sync-bg);color:var(--sync)}.i-micro{background:var(--micro-bg);color:var(--micro)}.i-macro{background:var(--macro-bg);color:var(--macro)}.i-web{background:var(--web-bg);color:var(--web)}
+.scode{margin:0;font-family:var(--font-mono);font-size:12.5px;line-height:1.75;overflow-x:auto}
+.scode div{white-space:pre;padding:0 8px;border-radius:5px;display:flex}
+.scode div b{font-weight:400;color:var(--muted);opacity:.6;width:2.2em;flex:none;text-align:right;margin-right:12px}
+.scode div.cur{background:var(--sync-bg);color:var(--sync)}
+.scode div.cur b{color:var(--sync);opacity:1}
+.desc{font-size:15px;line-height:1.55;padding:12px 14px;border-radius:10px;background:var(--accent-soft);color:var(--ink);border-left:4px solid var(--accent);min-height:52px}
+.ctrl{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.ctrl input[type=range]{flex:1;min-width:140px;accent-color:var(--accent)}
+.ctrl select{font:inherit;padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--ink)}
+.conout{font-family:var(--font-mono);font-size:13px;display:flex;flex-direction:column;gap:2px}
+.conout span.new{color:var(--accent);font-weight:500}
+.warn{background:var(--sync-bg);color:var(--sync);border-radius:10px;padding:10px 14px;font-size:14px}
+@media (max-width:820px){.sgrid{grid-template-columns:1fr}.sgrid .codebox{grid-row:auto}}
+@media (max-width:820px){.practice{grid-template-columns:1fr}.side{position:static}.tabs{margin-left:0}.wrap{padding:16px}.top{padding:12px 16px}.tl li{grid-template-columns:1fr}}
+@media (prefers-reduced-motion: reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/htm@3.1.1/dist/htm.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/acorn@8.11.3/dist/acorn.js"></script>
+<script src="sim.js"></script>
+<script>
+const {useState,useEffect,useCallback}=React;
+const html=htm.bind(React.createElement);
+
+const LEVELS=['Warm-up','Promises','async / await','Interview'];
+const PUZZLES=[
+{id:'basics',level:0,title:'Sync, promise, timeout',code:`console.log('A');
+setTimeout(() => console.log('B'), 0);
+Promise.resolve().then(() => console.log('C'));
+console.log('D');`,why:'Sync code first (A, D). Then the microtask queue is drained (C). Only then does the event loop pick a macrotask (B). setTimeout 0 never means "now".'},
+{id:'qm',level:0,title:'queueMicrotask vs then',code:`setTimeout(() => console.log('timeout'), 0);
+queueMicrotask(() => console.log('micro 1'));
+Promise.resolve().then(() => console.log('micro 2'));
+console.log('sync');`,why:'queueMicrotask and an already-resolved .then go into the same microtask queue, in the order they were queued (FIFO). Both beat the timer.'},
+{id:'delays',level:0,title:'Timer delays',code:`setTimeout(() => console.log('100ms'), 100);
+setTimeout(() => console.log('0ms'), 0);
+setTimeout(() => console.log('10ms'), 10);`,why:'Timers wait in the Web API area. A callback enters the macrotask queue only when its timer expires, so the delay decides the order, not the order of the lines.'},
+{id:'executor',level:0,title:'Promise executor is sync',code:`console.log('1');
+new Promise((resolve) => {
+  console.log('2');
+  resolve();
+  console.log('3');
+}).then(() => console.log('4'));
+console.log('5');`,why:'The function passed to new Promise runs immediately and synchronously, so 2 and 3 print in line. resolve() does not stop the executor. Only the .then callback is deferred as a microtask.'},
+{id:'chains',level:1,title:'Two chains interleave',code:`Promise.resolve()
+  .then(() => console.log('a1'))
+  .then(() => console.log('a2'));
+Promise.resolve()
+  .then(() => console.log('b1'))
+  .then(() => console.log('b2'));`,why:'Only a1 and b1 are queued at first. a2 is queued when a1 finishes, which puts it behind b1. Each .then in a chain waits for one more microtask turn, so the chains interleave.'},
+{id:'nestedmicro',level:1,title:'Microtask inside microtask',code:`setTimeout(() => console.log('T'), 0);
+Promise.resolve().then(() => {
+  console.log('P1');
+  Promise.resolve().then(() => console.log('P2'));
+});`,why:'The microtask queue is drained completely, including microtasks added while draining. P2 is queued during P1 and still runs before the timer T.'},
+{id:'microintimer',level:1,title:'Microtask inside a timer',code:`setTimeout(() => {
+  console.log('t1');
+  Promise.resolve().then(() => console.log('p in t1'));
+}, 0);
+setTimeout(() => console.log('t2'), 0);`,why:'After each macrotask, the event loop drains microtasks before taking the next macrotask. So "p in t1" runs between t1 and t2.'},
+{id:'asyncreturn',level:1,title:'async return value',code:`async function getVal() {
+  return 'val';
+}
+getVal().then((v) => console.log(v));
+console.log('sync');`,why:'An async function always returns a promise. Even a plain return value is delivered through .then, which is a microtask, so "sync" wins.'},
+{id:'returnpromise',level:1,title:'Returning a promise from then',code:`Promise.resolve()
+  .then(() => { console.log('A'); return Promise.resolve(); })
+  .then(() => console.log('B'));
+Promise.resolve()
+  .then(() => console.log('1'))
+  .then(() => console.log('2'))
+  .then(() => console.log('3'))
+  .then(() => console.log('4'));`,why:'Returning a promise (a thenable) from .then makes the outer promise adopt it, and that costs two extra microtask hops. B is delayed until after 3. This is a classic trick question.'},
+{id:'asyncsync',level:2,title:'async body runs sync',code:`async function demo() {
+  console.log('before');
+  await null;
+  console.log('after');
+}
+demo();
+console.log('sync');`,why:'Calling an async function runs its body synchronously up to the first await. "before" prints during the call, the rest of demo becomes a microtask, and "sync" prints first.'},
+{id:'awaitcall',level:2,title:'await another async call',code:`async function a() {
+  console.log('a start');
+  await b();
+  console.log('a end');
+}
+async function b() {
+  console.log('b');
+}
+a();
+console.log('sync');`,why:'b() is called synchronously while a is running, so "b" prints right away. Only the code after await is deferred.'},
+{id:'round1',level:2,title:'Two awaits vs a then',code:`console.log('A');
+setTimeout(() => console.log('B'), 0);
+async function run() {
+  console.log('C');
+  await null;
+  console.log('D');
+  await null;
+  console.log('E');
+}
+Promise.resolve().then(() => console.log('F'));
+run();
+console.log('G');`,why:'Sync: A, C, G. The F callback was queued before run hit its await, so F runs first, then D. The second await queues E behind it. The timer B comes last.'},
+{id:'awaitvsthen',level:2,title:'await vs then chain',code:`async function f() {
+  console.log('f1');
+  await undefined;
+  console.log('f2');
+}
+Promise.resolve()
+  .then(() => console.log('p1'))
+  .then(() => console.log('p2'));
+f();
+console.log('end');`,why:'Queue after sync: [p1, f2]. p1 runs and queues p2 behind f2. Result: p1, f2, p2.'},
+{id:'awaitloop',level:2,title:'await in a loop',code:`async function loop() {
+  for (let i = 1; i <= 3; i++) {
+    console.log('loop ' + i);
+    await null;
+  }
+}
+loop();
+Promise.resolve()
+  .then(() => console.log('then A'))
+  .then(() => console.log('then B'));
+console.log('sync');`,why:'Every await yields one microtask turn, so the loop and the .then chain take turns: loop 2, then A, loop 3, then B.'},
+{id:'nested',level:3,title:'Timers and promises nested',code:`console.log('A');
+setTimeout(() => {
+  console.log('B');
+  Promise.resolve().then(() => console.log('C'));
+}, 0);
+Promise.resolve().then(() => {
+  console.log('D');
+  setTimeout(() => console.log('E'), 0);
+});
+setTimeout(() => console.log('F'), 0);
+console.log('G');`,why:'Sync A, G. Microtask D queues timer E behind the existing timers B and F. Timer B runs, then its microtask C drains, then F, then E.'},
+{id:'classic',level:3,title:'The classic interview one',code:`console.log('script start');
+setTimeout(() => console.log('setTimeout'), 0);
+async function async1() {
+  console.log('async1 start');
+  await async2();
+  console.log('async1 end');
+}
+async function async2() {
+  console.log('async2');
+}
+async1();
+new Promise((resolve) => {
+  console.log('promise1');
+  resolve();
+}).then(() => console.log('promise2'));
+console.log('script end');`,why:'Sync: script start, async1 start, async2 (called synchronously), promise1 (executor), script end. Microtasks in queue order: async1 end, then promise2. The macrotask setTimeout comes last.'},
+{id:'varloop',level:3,title:'var in a timer loop',code:`for (var i = 0; i < 3; i++) {
+  setTimeout(() => console.log(i), 0);
+}`,why:'This is a closure question disguised as an event loop one. The timers run after the loop has finished, and var gives all three callbacks one shared i, which is 3 by then. Change var to let and you get 0 1 2.'}
+];
+
+const PG_DEFAULT=`console.log('start');
+
+setTimeout(() => console.log('timeout'), 0);
+
+fetchLike().then((v) => console.log('got', v));
+
+async function fetchLike() {
+  console.log('fetching');
+  await new Promise((r) => setTimeout(r, 50));
+  return 'data';
+}
+
+queueMicrotask(() => console.log('micro'));
+console.log('end');`;
+
+function runCode(code){
+  return new Promise((done)=>{
+    const realST=window.setTimeout.bind(window),realCT=window.clearTimeout.bind(window),realSI=window.setInterval.bind(window),realCI=window.clearInterval.bind(window),realQM=window.queueMicrotask.bind(window);
+    const origThen=Promise.prototype.then;
+    const events=[],logs=[];let phase=null,macroN=0,error=null,nextId=1;const pending=new Map();
+    const cur=()=>phase||'micro';
+    const show=(x)=>{if(typeof x==='string')return x;if(typeof x==='function')return 'ƒ';try{const s=JSON.stringify(x);return s===undefined?String(x):s;}catch(e){return String(x);}};
+    const log=(...a)=>{const t=a.map(show).join(' ');logs.push(t);events.push({k:'log',ph:cur(),n:macroN,t});};
+    const fakeConsole={log,info:log,warn:log,error:log,debug:log};
+    const runAs=(ph,fn,args)=>{const prev=phase;phase=ph;try{fn(...(args||[]));}catch(e){error=error||String(e);}finally{phase=prev;}};
+    const fST=(fn,ms,...args)=>{const id=nextId++;const d=Math.min(Math.max(Number(ms)||0,0),3000);
+      events.push({k:'timer',ph:cur(),n:macroN,t:'setTimeout('+(Number(ms)||0)+'ms): timer handed to Web API'});
+      const h=realST(()=>{pending.delete(id);macroN++;events.push({k:'macro',ph:'macro',n:macroN,t:'Timer done: callback runs as macrotask #'+macroN});runAs('macro',fn,args);},d);
+      pending.set(id,{h,i:false});return id;};
+    const fCT=(id)=>{const p=pending.get(id);if(p){(p.i?realCI:realCT)(p.h);pending.delete(id);}};
+    const fSI=(fn,ms,...args)=>{const id=nextId++;let c=0;const d=Math.min(Math.max(Number(ms)||0,4),3000);
+      events.push({k:'timer',ph:cur(),n:macroN,t:'setInterval('+(Number(ms)||0)+'ms): repeating timer handed to Web API'});
+      const h=realSI(()=>{c++;macroN++;events.push({k:'macro',ph:'macro',n:macroN,t:'Interval tick: macrotask #'+macroN});runAs('macro',fn,args);if(c>=30&&pending.has(id)){realCI(h);pending.delete(id);events.push({k:'note',ph:'loop',t:'Interval stopped after 30 ticks'});}},d);
+      pending.set(id,{h,i:true});return id;};
+    const fQM=(fn)=>{events.push({k:'qm',ph:cur(),n:macroN,t:'queueMicrotask: callback added to microtask queue'});realQM(()=>runAs('micro',fn));};
+    Promise.prototype.then=function(a,b){
+      const w=(f)=>typeof f==='function'?function(v){const prev=phase;phase='micro';try{return f.call(this,v);}finally{phase=prev;}}:f;
+      return origThen.call(this,w(a),w(b));
+    };
+    const onRej=(e)=>{error=error||('Unhandled rejection: '+show(e.reason));e.preventDefault();};
+    window.addEventListener('unhandledrejection',onRej);
+    const restore=()=>{Promise.prototype.then=origThen;realST(()=>window.removeEventListener('unhandledrejection',onRej),50);};
+    let fn;
+    try{fn=new Function('console','setTimeout','clearTimeout','setInterval','clearInterval','queueMicrotask',code);}
+    catch(e){restore();done({logs,events,error:'Syntax error: '+e.message});return;}
+    events.push({k:'start',ph:'sync',t:'Script starts: main() pushed onto the call stack'});
+    phase='sync';
+    try{fn(fakeConsole,fST,fCT,fSI,fCT,fQM);}catch(e){error=String(e);}
+    phase=null;
+    events.push({k:'end',ph:'loop',t:'Script done: stack empty, event loop drains the microtask queue'});
+    const started=Date.now();
+    const check=()=>{
+      if(pending.size===0||Date.now()-started>4000){
+        if(pending.size){pending.forEach((p)=>(p.i?realCI:realCT)(p.h));pending.clear();events.push({k:'note',ph:'loop',t:'Stopped after 4 seconds'});}
+        realST(()=>{restore();done({logs,events,error});},30);
+      } else realST(check,25);
+    };
+    realST(check,0);
+  });
+}
+
+let busy=Promise.resolve();
+function runQueued(code){const p=busy.then(()=>runCode(code));busy=p.catch(()=>{});return p;}
+
+function shuffleIdx(n){
+  const base=[...Array(n).keys()];if(n<2)return base;
+  for(let tries=0;tries<10;tries++){const a=base.slice();for(let i=n-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}if(a.some((v,i)=>v!==i))return a;}
+  return base.slice().reverse();
+}
+
+const PH={sync:['Sync','p-sync'],micro:['Microtask','p-micro'],macro:['Macrotask','p-macro'],web:['Web API','p-web'],loop:['Event loop','p-loop']};
+function phasePill(e){
+  if(e.k==='timer')return html`<span className="pill p-web">Web API</span>`;
+  if(e.k==='qm')return html`<span className="pill p-micro">Queued micro</span>`;
+  const p=PH[e.ph]||PH.loop;
+  const label=e.ph==='macro'&&e.n?p[0]+' #'+e.n:p[0];
+  return html`<span className=${'pill '+p[1]}>${label}</span>`;
+}
+
+function Timeline({events}){
+  return html`<div>
+    <p className="label">What actually happened, in order</p>
+    <div className="legend" style=${{marginBottom:'10px'}}>
+      <span className="pill p-sync">Sync: call stack</span><span className="pill p-micro">Microtask queue</span><span className="pill p-macro">Macrotask queue</span><span className="pill p-web">Web API</span><span className="pill p-loop">Event loop</span>
+    </div>
+    <ol className="tl">${events.map((e,i)=>html`<li key=${i}>${phasePill(e)}${e.k==='log'?html`<span className="out">${e.t}</span>`:html`<span className="sys">${e.t}</span>`}</li>`)}</ol>
+  </div>`;
+}
+
+function Code({code}){return html`<pre className="code">${code.split('\n').map((l,i)=>html`<span key=${i}>${l||' '}</span>`)}</pre>`;}
+
+
+const norm=(t)=>String(t).replace(/["\s]/g,'');
+function Box({title,items,cls,changed,empty,extra}){
+  return html`<div className=${'box'+(changed?' changed':'')}><h4><span>${title}</span>${extra&&html`<span>${extra}</span>`}</h4>
+    ${items.length?items.map((t,k)=>html`<div key=${k} className=${'item '+cls}>${t}</div>`):html`<span className="empty" style=${{fontSize:'13px'}}>${empty||'empty'}</span>`}</div>`;
+}
+const PHASE_TXT={sync:['Running sync code','p-sync'],micro:['Draining microtasks','p-micro'],macro:['Running a macrotask','p-macro'],loop:['Event loop checking','p-loop'],done:['Finished','p-loop']};
+function Stepper({code}){
+  const [sim]=useState(()=>{try{return simulateEventLoop(code,acorn);}catch(e){return {steps:[],out:[],error:'Simulator error: '+e.message};}});
+  const [i,setI]=useState(0);
+  const [playing,setPlaying]=useState(false);
+  const [speed,setSpeed]=useState(1100);
+  const [real,setReal]=useState(null);
+  const n=sim.steps.length;
+  useEffect(()=>{let live=true;runQueued(code).then((r)=>{if(live)setReal(r);});return()=>{live=false;};},[code]);
+  useEffect(()=>{if(!playing)return;if(i>=n-1){setPlaying(false);return;}const t=setTimeout(()=>setI((x)=>Math.min(n-1,x+1)),speed);return()=>clearTimeout(t);},[playing,i,speed,n]);
+  if(!n)return html`<div className="card"><p className="err" style=${{margin:0}}>${sim.error||'Nothing to step through.'}</p><p className="muted" style=${{margin:'6px 0 0',fontSize:'14px'}}>Use "Run and show" to see the real order instead.</p></div>`;
+  const s=sim.steps[i],p=i>0?sim.steps[i-1]:null;
+  const ch=(k)=>!!p&&JSON.stringify(p[k])!==JSON.stringify(s[k]);
+  const go=(d)=>{setPlaying(false);setI((x)=>Math.max(0,Math.min(n-1,x+d)));};
+  const onKey=(e)=>{if(e.target.tagName==='SELECT'||e.target.tagName==='INPUT')return;if(e.key==='ArrowRight'){e.preventDefault();go(1);}else if(e.key==='ArrowLeft'){e.preventDefault();go(-1);}else if(e.key===' '){e.preventDefault();setPlaying((x)=>!x);}};
+  const lines=code.split('\n');
+  const ph=PHASE_TXT[s.phase]||PHASE_TXT.loop;
+  const mismatch=real&&!sim.error&&!sim.truncated&&(real.logs.length!==sim.out.length||real.logs.some((t,k)=>norm(t)!==norm(sim.out[k])));
+  const newOut=ch('out');
+  return html`<div className="stack stepper" tabIndex="0" onKeyDown=${onKey} aria-label="Event loop step-through. Use left and right arrow keys to move, space to play or pause.">
+    ${sim.error&&html`<div className="warn">${sim.error}. Steps stop there. "Run and show" still gives the real order.</div>`}
+    ${sim.truncated&&html`<div className="warn">Stopped after ${n} steps. That's usually an endless loop or a very long program.</div>`}
+    ${mismatch&&html`<div className="warn">Heads up: this simulation's order differs from real execution (${real.logs.join(', ')}). Trust the real order and treat these steps as approximate.</div>`}
+    <div className="card stack" style=${{gap:'12px'}}>
+      <div className="ctrl">
+        <button onClick=${()=>{setPlaying(false);setI(0);}} aria-label="Go to first step">⏮</button>
+        <button onClick=${()=>go(-1)} aria-label="Previous step">← Back</button>
+        <button className="primary" onClick=${()=>{if(i>=n-1)setI(0);setPlaying(!playing);}}>${playing?'Pause':'Play'}</button>
+        <button onClick=${()=>go(1)} aria-label="Next step">Next →</button>
+        <label className="muted" htmlFor="spd" style=${{fontSize:'13px'}}>Speed</label>
+        <select id="spd" value=${speed} onChange=${(e)=>setSpeed(Number(e.target.value))}><option value="2000">Slow</option><option value="1100">Normal</option><option value="500">Fast</option></select>
+        <span className=${'pill '+ph[1]} style=${{marginLeft:'auto'}}>${ph[0]}</span>
+        <span className="pill p-web mono">t = ${s.clock}ms</span>
+      </div>
+      <div className="ctrl"><input type="range" min="0" max=${n-1} step="1" value=${i} onChange=${(e)=>{setPlaying(false);setI(Number(e.target.value));}} aria-label="Step"/><span className="muted mono" style=${{fontSize:'13px',minWidth:'84px',textAlign:'right'}}>step ${i+1} / ${n}</span></div>
+      <div className="desc" aria-live="polite">${s.desc}</div>
+    </div>
+    <div className="sgrid">
+      <div className="box codebox"><h4><span>Code</span><span>${s.line?'line '+s.line:'between tasks'}</span></h4>
+        <div className="scode">${lines.map((l,k)=>html`<div key=${k} className=${s.line===k+1?'cur':''}><b>${k+1}</b><span>${l||' '}</span></div>`)}</div></div>
+      <${Box} title="Call stack (top first)" items=${s.stack} cls="i-sync" changed=${ch('stack')} empty="empty: nothing running"/>
+      <${Box} title="Web APIs (browser timers)" items=${s.web} cls="i-web" changed=${ch('web')} empty="no timers waiting"/>
+      <${Box} title="Microtask queue (runs first)" items=${s.micro} cls="i-micro" changed=${ch('micro')} extra="FIFO →"/>
+      <${Box} title="Macrotask queue (one per turn)" items=${s.macro} cls="i-macro" changed=${ch('macro')} extra="FIFO →"/>
+    </div>
+    <div className=${'box'+(newOut?' changed':'')}><h4><span>Console</span></h4>
+      ${s.out.length?html`<div className="conout">${s.out.map((t,k)=>html`<span key=${k} className=${newOut&&k===s.out.length-1?'new':''}>${'> '+t}</span>`)}</div>`:html`<span className="empty" style=${{fontSize:'13px'}}>nothing printed yet</span>`}</div>
+    <p className="muted" style=${{fontSize:'13px',margin:0}}>Keys: ← → to step, space to play or pause. The box that changed in this step is outlined. Time is simulated: 0ms timers expire as soon as the event loop looks for a macrotask.</p>
+  </div>`;
+}
+
+function Runner({code,why,reveal,onSolved}){
+  const [res,setRes]=useState(null);
+  const [order,setOrder]=useState([]);
+  const [pred,setPred]=useState([]);
+  const [checked,setChecked]=useState(!!reveal);
+  const [err,setErr]=useState('');
+  const [step,setStep]=useState(false);
+  useEffect(()=>{let live=true;setStep(false);setRes(null);setPred([]);setChecked(!!reveal);setErr('');
+    runQueued(code).then((r)=>{if(!live)return;setRes(r);setOrder(shuffleIdx(r.logs.length));});
+    return()=>{live=false;};},[code,reveal]);
+  if(!res)return html`<div className="card"><p className="muted" style=${{margin:0}}>Running the code in a sandbox…</p></div>`;
+  const n=res.logs.length;
+  const used=new Set(pred);
+  const predTexts=pred.map((i)=>res.logs[i]);
+  const correct=checked&&!reveal&&predTexts.length===n&&predTexts.every((t,i)=>t===res.logs[i]);
+  const check=()=>{if(pred.length<n){setErr('Place all '+n+' outputs in order before checking.');return;}setErr('');setChecked(true);
+    if(predTexts.every((t,i)=>t===res.logs[i])&&onSolved)onSolved();};
+  const add=(i)=>{if(checked)return;setErr('');setPred([...pred,i]);};
+  const remove=(k)=>{if(checked)return;setErr('');setPred(pred.filter((_,j)=>j!==k));};
+  const retry=()=>{setPred([]);setChecked(false);setOrder(shuffleIdx(n));setErr('');};
+  return html`<div className="stack">
+    ${res.error&&html`<div className="card"><p className="err" style=${{margin:0}}>${res.error}</p></div>`}
+    ${!reveal&&n>0&&html`<div className="card">
+      <p className="label">Click the outputs in the order you think they print</p>
+      <div className="row">${order.map((i)=>html`<button key=${i} className="chip" disabled=${used.has(i)||checked} onClick=${()=>add(i)}>${res.logs[i]}</button>`)}</div>
+      <p className="label" style=${{marginTop:'16px'}}>Your prediction${checked?'':' (click an item to remove it)'}</p>
+      <div className="row" style=${{minHeight:'34px'}}>
+        ${pred.length===0?html`<span className="empty">Nothing placed yet</span>`:pred.map((i,k)=>{
+          const st=checked?(res.logs[k]===res.logs[i]?' ok':' bad'):'';
+          return html`<button key=${k} className=${'slot'+st} onClick=${()=>remove(k)} aria-label=${'Position '+(k+1)+': '+res.logs[i]}><small>${k+1}</small>${res.logs[i]}</button>`;})}
+      </div>
+      ${err&&html`<p className="err" role="alert">${err}</p>`}
+      <div className="row" style=${{marginTop:'14px'}}>
+        ${!checked&&html`<button className="primary" onClick=${check}>Check my order</button>`}
+        ${!checked&&html`<button onClick=${()=>{setPred([]);setErr('');}}>Clear</button>`}
+        ${!checked&&html`<button className="ghost" onClick=${()=>{setChecked(true);setErr('');}}>Show answer</button>`}
+        ${checked&&html`<button onClick=${retry}>Try again</button>`}
+        ${checked&&pred.length>0&&html`<span className=${'verdict '+(correct?'ok':'bad')}>${correct?'Correct, nice work':'Not quite. Compare with the real order below'}</span>`}
+      </div>
+    </div>`}
+    ${n===0&&html`<div className="card"><p className="muted" style=${{margin:0}}>This code doesn't log anything. Add some console.log calls.</p></div>`}
+    ${checked&&n>0&&html`<div className="card stack">
+      <div><p className="label">Real output</p>
+        <div className="row">${res.logs.map((t,k)=>html`<span key=${k} className="slot ok"><small>${k+1}</small>${t}</span>`)}</div></div>
+      ${why&&html`<div><p className="label">Why</p><p className="explain">${why}</p></div>`}
+      <div className="row"><button className="primary" onClick=${()=>setStep(!step)}>${step?'Hide step-through':'Step through it visually'}</button><span className="muted" style=${{fontSize:'13px'}}>See every line move through the stack and queues</span></div>
+      ${!step&&html`<${Timeline} events=${res.events}/>`}
+    </div>`}
+    ${checked&&step&&html`<${Stepper} code=${code}/>`}
+  </div>`;
+}
+
+function loadSolved(){try{return JSON.parse(localStorage.getItem('elg-solved')||'[]');}catch(e){return [];}}
+function saveSolved(s){try{localStorage.setItem('elg-solved',JSON.stringify(s));}catch(e){}}
+
+function Practice(){
+  const [idx,setIdx]=useState(0);
+  const [solved,setSolved]=useState(loadSolved);
+  const p=PUZZLES[idx];
+  const markSolved=useCallback(()=>{setSolved((s)=>{if(s.includes(p.id))return s;const ns=[...s,p.id];saveSolved(ns);return ns;});},[p.id]);
+  return html`<div className="practice">
+    <nav className="side" aria-label="Puzzles">
+      <div style=${{fontSize:'13px'}}><strong>${solved.length}</strong> <span className="muted">of ${PUZZLES.length} solved</span></div>
+      <div className="progress"><div style=${{width:(solved.length/PUZZLES.length*100)+'%'}}></div></div>
+      ${LEVELS.map((lv,li)=>html`<div key=${li}><h3>${lv}</h3>
+        ${PUZZLES.map((q,qi)=>q.level!==li?null:html`<button key=${q.id} className=${qi===idx?'on':''} onClick=${()=>setIdx(qi)}><span className=${'dot'+(solved.includes(q.id)?' done':'')}></span>${q.title}</button>`)}
+      </div>`)}
+    </nav>
+    <div className="stack">
+      <div className="card">
+        <div className="row" style=${{justifyContent:'space-between',marginBottom:'10px'}}>
+          <div><span className="muted" style=${{fontSize:'12px'}}>${LEVELS[p.level]} · ${idx+1} of ${PUZZLES.length}</span><h2 style=${{fontSize:'18px'}}>${p.title}</h2></div>
+          <div className="row"><button onClick=${()=>setIdx((idx-1+PUZZLES.length)%PUZZLES.length)} aria-label="Previous puzzle">← Prev</button><button onClick=${()=>setIdx((idx+1)%PUZZLES.length)} aria-label="Next puzzle">Next →</button></div>
+        </div>
+        <${Code} code=${p.code}/>
+      </div>
+      <${Runner} key=${p.id} code=${p.code} why=${p.why} onSolved=${markSolved}/>
+    </div>
+  </div>`;
+}
+
+function Playground(){
+  const [code,setCode]=useState(()=>{try{return localStorage.getItem('elg-pg')||PG_DEFAULT;}catch(e){return PG_DEFAULT;}});
+  const [run,setRun]=useState(()=>({mode:'step',code:(()=>{try{return localStorage.getItem('elg-pg')||PG_DEFAULT;}catch(e){return PG_DEFAULT;}})(),k:1}));
+  const [err,setErr]=useState('');
+  useEffect(()=>{try{localStorage.setItem('elg-pg',code);}catch(e){}},[code]);
+  const go=(mode)=>{if(!code.trim()){setErr('Write some code first.');return;}setErr('');setRun({mode,code,k:Date.now()});};
+  const onKey=(e)=>{if(e.key==='Tab'){e.preventDefault();const t=e.target,s=t.selectionStart,en=t.selectionEnd;const v=code.slice(0,s)+'  '+code.slice(en);setCode(v);requestAnimationFrame(()=>{t.selectionStart=t.selectionEnd=s+2;});}
+    if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){e.preventDefault();go('step');}};
+  return html`<div className="stack">
+    <div className="card">
+      <label className="label" htmlFor="pg-code" style=${{display:'block'}}>Your code. Browser rules apply. Step mode supports functions, async/await, promises (then, catch, finally, all, race), setTimeout, setInterval, queueMicrotask, loops and try/catch. Classes and destructuring are not supported yet.</label>
+      <textarea id="pg-code" spellCheck="false" value=${code} onChange=${(e)=>{setCode(e.target.value);setErr('');}} onKeyDown=${onKey}></textarea>
+      ${err&&html`<p className="err" role="alert">${err}</p>`}
+      <div className="row" style=${{marginTop:'12px'}}>
+        <button className="primary" onClick=${()=>go('step')}>Step through (Ctrl+Enter)</button>
+        <button onClick=${()=>go('quiz')}>Quiz me on this</button>
+        <button onClick=${()=>go('show')}>Run and show</button>
+        <button className="ghost" onClick=${()=>{setCode(PG_DEFAULT);setRun(null);}}>Reset example</button>
+      </div>
+    </div>
+    ${run&&run.mode==='step'&&html`<${Stepper} key=${run.k} code=${run.code}/>`}
+    ${run&&run.mode!=='step'&&html`<${Runner} key=${run.k} code=${run.code} reveal=${run.mode==='show'}/>`}
+  </div>`;
+}
+
+function Sheet(){
+  return html`<div className="sheet">
+    <div className="card"><h2>The one rule</h2>
+<pre className="loopbox">while (true) {
+  run one macrotask        // the first one is your whole script
+  drain ALL microtasks     // including ones added while draining
+  render if needed         // rAF → style → layout → paint (browser)
+}</pre>
+      <p>An async function runs synchronously until its first await. Everything after that await continues as a microtask.</p>
+    </div>
+    <div className="card"><h2>Which queue does it go to?</h2>
+      <table><thead><tr><th>API</th><th>Goes to</th></tr></thead><tbody>
+        <tr><td className="mono">console.log, plain code</td><td><span className="pill p-sync">Call stack, now</span></td></tr>
+        <tr><td className="mono">new Promise(executor)</td><td><span className="pill p-sync">Executor runs now</span></td></tr>
+        <tr><td className="mono">.then / .catch / .finally</td><td><span className="pill p-micro">Microtask</span> once the promise settles</td></tr>
+        <tr><td className="mono">code after await</td><td><span className="pill p-micro">Microtask</span></td></tr>
+        <tr><td className="mono">queueMicrotask, MutationObserver</td><td><span className="pill p-micro">Microtask</span></td></tr>
+        <tr><td className="mono">setTimeout, setInterval</td><td><span className="pill p-web">Web API timer</span> then <span className="pill p-macro">Macrotask</span></td></tr>
+        <tr><td className="mono">click, input, fetch done, I/O, MessageChannel</td><td><span className="pill p-macro">Macrotask</span></td></tr>
+        <tr><td className="mono">requestAnimationFrame</td><td><span className="pill p-loop">Before next paint</span></td></tr>
+      </tbody></table>
+    </div>
+    <div className="card"><h2>Is there an "event queue"?</h2>
+      <p>Yes. It's another name for the macrotask queue. These all mean the same thing:</p>
+      <ul><li>Macrotask queue</li><li>Task queue (the HTML spec's term)</li><li>Callback queue</li><li>Event queue, message queue</li></ul>
+      <p>The HTML spec actually allows several task queues (timers, user input, networking), and the browser may pick which one to serve next, often giving user input priority. There is exactly one microtask queue per event loop, and it always drains before the next task.</p>
+    </div>
+    <div className="card"><h2>Node.js differences</h2>
+      <p>Node's loop runs in phases, each with its own queue:</p>
+      <ol><li>timers (setTimeout, setInterval)</li><li>pending callbacks</li><li>poll (I/O)</li><li>check (setImmediate)</li><li>close callbacks</li></ol>
+      <p>Between callbacks, Node drains process.nextTick first, then promise microtasks. Priority: <span className="mono">sync → nextTick → promises → next macrotask</span>. This gym runs in your browser, so it uses browser rules.</p>
+    </div>
+    <div className="card"><h2>How to solve any puzzle</h2>
+      <ol><li>Keep three lists: Output, Micro queue, Macro queue.</li><li>Walk the code line by line. Print sync logs and push callbacks to the right list.</li><li>Stack empty? Drain micro fully, adding new micros to the end as you go.</li><li>Take one macro, run it, then drain micro again.</li><li>Repeat until both lists are empty.</li></ol>
+    </div>
+    <div className="card"><h2>Traps</h2>
+      <ul><li>setTimeout(fn, 0) is never immediate. It's at least one macrotask later.</li><li>A chained .then is queued only when the previous one finishes.</li><li>Returning a promise from .then costs two extra microtask hops.</li><li>Endless microtasks starve the page: no timers, no rendering, no clicks.</li><li>A timer's delay is a minimum, not a guarantee.</li></ul>
+    </div>
+  </div>`;
+}
+
+const ROUTES={practice:'Practice',playground:'Playground',cheatsheet:'Cheat sheet'};
+function App(){
+  const get=()=>{const h=location.hash.replace('#','');return ROUTES[h]?h:'practice';};
+  const [route,setRoute]=useState(get);
+  useEffect(()=>{const f=()=>setRoute(get());window.addEventListener('hashchange',f);return()=>window.removeEventListener('hashchange',f);},[]);
+  return html`<div>
+    <header className="top">
+      <h1 className="brand">Event Loop Gym<span>Predict the order, then see why</span></h1>
+      <nav className="tabs">${Object.entries(ROUTES).map(([k,v])=>html`<a key=${k} href=${'#'+k} className=${route===k?'on':''} onClick=${()=>setRoute(k)}>${v}</a>`)}</nav>
+    </header>
+    <main className="wrap">
+      ${route==='practice'&&html`<${Practice}/>`}
+      ${route==='playground'&&html`<${Playground}/>`}
+      ${route==='cheatsheet'&&html`<${Sheet}/>`}
+    </main>
+  </div>`;
+}
+ReactDOM.createRoot(document.getElementById('root')).render(html`<${App}/>`);
+</script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+{
+  "name": "event-loop-gym",
+  "version": "1.0.0",
+  "description": "Practice JavaScript event loop ordering: predict the output, then step through the call stack, Web APIs, microtask and macrotask queues.",
+  "private": true,
+  "scripts": { "test": "node test/compare.js" },
+  "devDependencies": { "acorn": "8.11.3" },
+  "license": "MIT"
+}
